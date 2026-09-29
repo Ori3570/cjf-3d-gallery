@@ -146,6 +146,37 @@ async function downloadScene(url, total) {
   if (offset !== total) throw Error('模型文件不完整，请重新加载');
   return whole;
 }
+async function validScene(blob, expectedHash) {
+  if (!globalThis.crypto?.subtle) return true;
+  const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('') === expectedHash;
+}
+// HTTP range responses are not reliably retained by every browser. Store the
+// assembled, verified model separately so repeat visits need no model transfer.
+async function sceneCache(mode, key, blob) {
+  if (!globalThis.indexedDB || !key) return null;
+  let db;
+  try {
+    db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('cjf-scene-cache', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('models');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(Error('Storage is busy'));
+    });
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('models', mode === 'write' ? 'readwrite' : 'readonly');
+      const store = tx.objectStore('models');
+      let value = null;
+      if (mode === 'write') { store.clear(); store.put(blob, key); }
+      else { const request = store.get(key); request.onsuccess = () => value = request.result || null; }
+      tx.oncomplete = () => resolve(mode === 'write' ? true : value);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } catch { return null; }
+  finally { db?.close(); }
+}
 async function loadScene() {
   const configResponse = await fetch('assets/scene.json');
   if (!configResponse.ok) throw Error('场景信息读取失败');
@@ -153,24 +184,38 @@ async function loadScene() {
   gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
   if (!gl || typeof DecompressionStream === 'undefined') throw Error('当前浏览器暂不支持交互三维，请先看动态视频');
   const total = cfg.compressedBytes;
-  const chunked = await downloadScene('assets/scene.bin.gz', total);
-  let compressed;
-  if (chunked) {
-    compressed = new Blob([chunked]);
+  const cacheKey = cfg.compressedSha256;
+  let compressed = await sceneCache('read', cacheKey);
+  if (compressed && (compressed.size !== total || !await validScene(compressed, cacheKey))) compressed = null;
+  const cached = Boolean(compressed);
+  if (cached) {
+    progress.value = 90;
+    status.textContent = '正在读取已保存在本机的三维数据…';
   } else {
-    // Server without Range support: plain single stream.
-    const response = await fetch('assets/scene.bin.gz');
-    if (!response.ok) throw Error('模型文件读取失败，请重新加载');
-    const reader = response.body.getReader(), chunks = [];
-    let received = 0;
-    while (true) {
-      const {value, done} = await reader.read(); if (done) break;
-      chunks.push(value); received += value.byteLength;
-      progress.value = Math.min(90, received / total * 90);
-      status.textContent = `加载三维数据 ${Math.min(100, Math.round(received / total * 100))}% · ${(total / 1048576).toFixed(1)} MB`;
+    const chunked = await downloadScene('assets/scene.bin.gz', total);
+    if (chunked) {
+      compressed = new Blob([chunked]);
+    } else {
+      // Server without Range support: plain single stream.
+      const response = await fetch('assets/scene.bin.gz');
+      if (!response.ok) throw Error('模型文件读取失败，请重新加载');
+      const reader = response.body.getReader(), chunks = [];
+      let received = 0;
+      while (true) {
+        const {value, done} = await reader.read(); if (done) break;
+        chunks.push(value); received += value.byteLength;
+        progress.value = Math.min(90, received / total * 90);
+        status.textContent = `加载三维数据 ${Math.min(100, Math.round(received / total * 100))}% · ${(total / 1048576).toFixed(1)} MB`;
+      }
+      compressed = new Blob(chunks);
     }
-    compressed = new Blob(chunks);
+    if (compressed.size !== total || !await validScene(compressed, cacheKey)) throw Error('三维数据校验失败，请重新加载');
+    const saved = await sceneCache('write', cacheKey, compressed);
+    document.querySelector('.loading-note').textContent = saved
+      ? '三维数据已保存在此浏览器，下次直接从本机读取。'
+      : '此浏览器暂不能保存三维数据，本次仍可正常浏览。';
   }
+  stage.dataset.modelSource = cached ? 'local-cache' : 'network';
   status.textContent = '正在展开三维空间…';
   const decompressed = compressed.stream().pipeThrough(new DecompressionStream('gzip'));
   const buffer = await new Response(decompressed).arrayBuffer();
