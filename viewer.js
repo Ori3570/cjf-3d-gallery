@@ -11,10 +11,30 @@ const pointers = new Map();
 const TAU = Math.PI * 2;
 const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
 let toastTimer;
+const radians = degrees => degrees * Math.PI / 180;
+const viewLimits = { yaw: [radians(-9), radians(17)], pitch: [radians(-8), radians(16)] };
+let orbitYawPhase = 0, orbitPitchPhase = 0;
+function axisWave(axis, phase) {
+  const [low, high] = viewLimits[axis];
+  return (low + high) / 2 + (high - low) / 2 * Math.sin(phase);
+}
+function phaseAt(axis) {
+  const [low, high] = viewLimits[axis];
+  return Math.asin(clamp((pose[axis] - (low + high) / 2) / ((high - low) / 2), -1, 1));
+}
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 3500); }
-function setOrbit(value) { orbit = value; motionButton.setAttribute('aria-pressed', String(value)); motionButton.innerHTML = value ? '<span aria-hidden="true">Ⅱ</span> 暂停环绕' : '<span aria-hidden="true">▷</span> 自动环绕'; }
+function setOrbit(value) {
+  if (value && !orbit) { animationTime = 0; orbitYawPhase = phaseAt('yaw'); orbitPitchPhase = phaseAt('pitch'); }
+  orbit = value;
+  motionButton.setAttribute('aria-pressed', String(value));
+  motionButton.innerHTML = value ? '<span aria-hidden="true">Ⅱ</span> 暂停环绕' : '<span aria-hidden="true">▷</span> 自动环绕';
+}
 function reset() { setOrbit(false); pose = { yaw: 0, pitch: 0, distance: cfg.focusDepth, panX: 0, panY: 0 }; dirty = true; needsSort = true; }
-function onChange() { dirty = true; needsSort = true; $('#gesture-hint').hidden = true; }
+function onChange() {
+  pose.yaw = clamp(pose.yaw, ...viewLimits.yaw);
+  pose.pitch = clamp(pose.pitch, ...viewLimits.pitch);
+  dirty = true; needsSort = true; $('#gesture-hint').hidden = true;
+}
 function camera() {
   const cy = Math.cos(pose.yaw), sy = Math.sin(pose.yaw), cp = Math.cos(pose.pitch), sp = Math.sin(pose.pitch);
   const right = [cy, 0, -sy], down = [-sy * sp, cp, -cy * sp], forward = [sy * cp, sp, cy * cp];
@@ -265,14 +285,19 @@ async function loadScene() {
   ready = true; canvas.hidden = false; $('#poster').hidden = true; loading.hidden = true;
   progress.value = 100; $('#gesture-hint').hidden = false;
   ['reset', 'motion', 'pan'].forEach(id => $('#' + id).disabled = false);
-  $('#scene-info').textContent = `${(cfg.count / 10000).toFixed(1)} 万个三维高斯 · 自由视角`;
+  $('#scene-info').textContent = `${(cfg.count / 10000).toFixed(1)} 万个三维高斯 · 环绕 −9°～17° · 俯仰 −8°～16°`;
   reset(); frameId = requestAnimationFrame(draw);
 }
 function draw(time) {
   if (!ready) return;
   const dt = Math.min((time - lastFrame) / 1000, .05); lastFrame = time;
   if (!document.hidden && !videoMode) {
-    if (orbit) { animationTime += dt; pose.yaw += dt * .14; pose.pitch = Math.sin(animationTime * .35) * .16; onChange(); }
+    if (orbit) {
+      animationTime += dt;
+      pose.yaw = axisWave('yaw', animationTime * TAU / 20 + orbitYawPhase);
+      pose.pitch = axisWave('pitch', animationTime * TAU / 24 + orbitPitchPhase);
+      onChange();
+    }
     if (dirty && time - lastDraw >= 33) {
       const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const scale = Math.min(dpr, 1200 / Math.max(stage.clientWidth, stage.clientHeight));
@@ -325,8 +350,8 @@ canvas.addEventListener('pointermove', e => {
   } else if (panMode || e.shiftKey || e.buttons === 2) {
     pan(current.x - previous.x, current.y - previous.y, 1);
   } else {
-    pose.yaw -= (current.x - previous.x) / Math.max(canvas.clientWidth, 1) * TAU;
-    pose.pitch = clamp(pose.pitch + (current.y - previous.y) / Math.max(canvas.clientHeight, 1) * Math.PI, -1.5, 1.5);
+    pose.yaw -= (current.x - previous.x) / Math.max(canvas.clientWidth, 1) * (viewLimits.yaw[1] - viewLimits.yaw[0]);
+    pose.pitch += (current.y - previous.y) / Math.max(canvas.clientHeight, 1) * (viewLimits.pitch[1] - viewLimits.pitch[0]);
   }
   pointers.set(e.pointerId, current); onChange();
 });
@@ -339,14 +364,14 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('wheel', e => { e.preventDefault(); if (!ready) return; setOrbit(false); pose.distance = clamp(pose.distance * Math.exp(clamp(e.deltaY, -150, 150) * .002), cfg.focusDepth * .05, cfg.focusDepth * 8); onChange(); }, {passive: false});
 canvas.addEventListener('keydown', e => {
   if (!ready) return;
-  const step = Math.PI / 18;
+  const step = radians(2);
   if (e.key.toLowerCase() === 'r') { reset(); e.preventDefault(); return; }
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) return;
   setOrbit(false); e.preventDefault();
   if (e.key === 'ArrowLeft') pose.yaw -= step;
   if (e.key === 'ArrowRight') pose.yaw += step;
-  if (e.key === 'ArrowUp') pose.pitch = clamp(pose.pitch - step, -1.5, 1.5);
-  if (e.key === 'ArrowDown') pose.pitch = clamp(pose.pitch + step, -1.5, 1.5);
+  if (e.key === 'ArrowUp') pose.pitch -= step;
+  if (e.key === 'ArrowDown') pose.pitch += step;
   if (e.key === '+' || e.key === '=') pose.distance *= .9;
   if (e.key === '-') pose.distance *= 1.1;
   pose.distance = clamp(pose.distance, cfg.focusDepth * .05, cfg.focusDepth * 8); onChange();
