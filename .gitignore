@@ -1,0 +1,4 @@
+verification/
+__pycache__/
+*.zip
+deployment-state.json

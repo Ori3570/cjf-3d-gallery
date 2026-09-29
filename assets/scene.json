@@ -1,0 +1,13 @@
+{
+  "count": 1174324,
+  "width": 690,
+  "height": 919,
+  "focal": 796.8269653320312,
+  "nearDepth": 0.7340185046195984,
+  "focusDepth": 0.7340185046195984,
+  "compressedBytes": 56309773,
+  "format": "13 little-endian float32 values per Gaussian: xyz, rgb, opacity, xx, xy, xz, yy, yz, zz",
+  "source": "cjf single-image ML-SHARP output",
+  "dataSha256": "91989476f78bd113db2579d39ba52265235f0f51740862113e737426035aa5e1",
+  "compressedSha256": "844a918a104d0c7f70e1f0ed433b38fb1fe200812308837d3c59acf9b9f4535c"
+}
