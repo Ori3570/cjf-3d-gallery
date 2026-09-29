@@ -80,24 +80,99 @@ void main() {
  if (alpha<0.0039) discard;
  frag = vec4(color.rgb,alpha);
 }`;
+// One long-lived connection can silently degrade to a crawl on long routes.
+// Download in parallel range chunks; a chunk whose stream stalls is aborted
+// and retried on a fresh connection.
+async function fetchRange(url, start, end, onData, stallMs) {
+  const controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(), stallMs);
+  try {
+    const response = await fetch(url, {headers: {Range: `bytes=${start}-${end}`}, signal: controller.signal, cache: 'no-store'});
+    if (response.status !== 206) throw Error('服务器不支持断点下载');
+    const reader = response.body.getReader(), pieces = [];
+    let received = 0;
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), stallMs);
+      pieces.push(value); received += value.byteLength; onData(value.byteLength);
+    }
+    if (received !== end - start + 1) throw Error('分块长度不符');
+    const whole = new Uint8Array(received);
+    let offset = 0;
+    for (const piece of pieces) { whole.set(piece, offset); offset += piece.byteLength; }
+    return whole;
+  } finally { clearTimeout(timer); }
+}
+async function probeRange(url) {
+  for (let attempt = 0; ; attempt++) {
+    try { await fetchRange(url, 0, 0, () => {}, 10000); return true; }
+    catch (error) {
+      if (error.message === '服务器不支持断点下载') return false;
+      if (attempt >= 2) throw Error('网络不稳定，请重新加载');
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+  }
+}
+async function downloadScene(url, total) {
+  if (!await probeRange(url)) return null;
+  const CHUNK = 4 * 1048576, PARALLEL = 4, ATTEMPTS = 6, STALL = 10000;
+  const chunkCount = Math.ceil(total / CHUNK), parts = new Array(chunkCount);
+  let received = 0, next = 0;
+  const report = () => {
+    progress.value = Math.min(90, received / total * 90);
+    status.textContent = `加载三维数据 ${Math.min(100, Math.round(received / total * 100))}% · ${(total / 1048576).toFixed(1)} MB`;
+  };
+  const workers = Array.from({length: Math.min(PARALLEL, chunkCount)}, async () => {
+    while (next < chunkCount) {
+      const index = next++, start = index * CHUNK, end = Math.min(total, start + CHUNK) - 1;
+      for (let attempt = 1; ; attempt++) {
+        let counted = 0;
+        try {
+          parts[index] = await fetchRange(url, start, end, bytes => { counted += bytes; received += bytes; report(); }, STALL);
+          break;
+        } catch (error) {
+          received -= counted;
+          if (attempt >= ATTEMPTS) throw Error('网络不稳定，模型下载多次中断，请重新加载');
+          await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+        }
+      }
+    }
+  });
+  await Promise.all(workers);
+  const whole = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) { whole.set(part, offset); offset += part.byteLength; }
+  if (offset !== total) throw Error('模型文件不完整，请重新加载');
+  return whole;
+}
 async function loadScene() {
   const configResponse = await fetch('assets/scene.json');
   if (!configResponse.ok) throw Error('场景信息读取失败');
   cfg = await configResponse.json();
   gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
   if (!gl || typeof DecompressionStream === 'undefined') throw Error('当前浏览器暂不支持交互三维，请先看动态视频');
-  const response = await fetch('assets/scene.bin.gz');
-  if (!response.ok) throw Error('模型文件读取失败，请重新加载');
-  const total = cfg.compressedBytes, reader = response.body.getReader(), chunks = [];
-  let received = 0;
-  while (true) {
-    const {value, done} = await reader.read(); if (done) break;
-    chunks.push(value); received += value.byteLength;
-    progress.value = Math.min(90, received / total * 90);
-    status.textContent = `加载三维数据 ${Math.min(100, Math.round(received / total * 100))}% · ${(total / 1048576).toFixed(1)} MB`;
+  const total = cfg.compressedBytes;
+  const chunked = await downloadScene('assets/scene.bin.gz', total);
+  let compressed;
+  if (chunked) {
+    compressed = new Blob([chunked]);
+  } else {
+    // Server without Range support: plain single stream.
+    const response = await fetch('assets/scene.bin.gz');
+    if (!response.ok) throw Error('模型文件读取失败，请重新加载');
+    const reader = response.body.getReader(), chunks = [];
+    let received = 0;
+    while (true) {
+      const {value, done} = await reader.read(); if (done) break;
+      chunks.push(value); received += value.byteLength;
+      progress.value = Math.min(90, received / total * 90);
+      status.textContent = `加载三维数据 ${Math.min(100, Math.round(received / total * 100))}% · ${(total / 1048576).toFixed(1)} MB`;
+    }
+    compressed = new Blob(chunks);
   }
   status.textContent = '正在展开三维空间…';
-  const compressed = new Blob(chunks), decompressed = compressed.stream().pipeThrough(new DecompressionStream('gzip'));
+  const decompressed = compressed.stream().pipeThrough(new DecompressionStream('gzip'));
   const buffer = await new Response(decompressed).arrayBuffer();
   if (buffer.byteLength !== cfg.count * 52) throw Error('模型文件不完整，请重新加载');
   const data = new Float32Array(buffer);

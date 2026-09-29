@@ -15,9 +15,9 @@
 
 ## 本地查看
 
-在此目录运行 `python serve.py`，打开 http://127.0.0.1:8771/ 。不要直接双击 HTML；浏览器需要通过 HTTP 读取场景文件与排序 worker。此脚本固定 JavaScript 的 MIME 类型，避免 Windows 注册表将 `.js` 映射成纯文本而导致模块不能运行。
+在此目录运行 `python serve.py`，打开 http://127.0.0.1:8771/ 。不要直接双击 HTML；浏览器需要通过 HTTP 读取场景文件与排序 worker。此脚本固定 JavaScript 的 MIME 类型，避免 Windows 注册表将 `.js` 映射成纯文本而导致模块不能运行，并支持 Range 断点请求，与线上行为一致。
 
-`prepare_assets.py` 从已有输出复制展示图片和视频、gzip 无损压缩高斯数据，不重新运行模型。站点没有第三方 JavaScript、CDN、分析 SDK、Cookie 或上传接口；所有路径均为相对路径，可直接部署在 GitHub Pages 的项目子目录。
+`prepare_assets.py` 从已有输出复制展示图片和视频、gzip 无损压缩高斯数据，不重新运行模型。三维数据按 4 MB 分块并行下载：单条连接在跨境链路上可能悄悄劣化到极慢，分块下载检测到停滞就换一条新连接重试，GitHub Pages 的 Range 请求已验证支持；不支持断点的服务器自动退回单流下载。站点没有第三方 JavaScript、CDN、分析 SDK、Cookie 或上传接口；所有路径均为相对路径，可直接部署在 GitHub Pages 的项目子目录。
 
 ## GitHub Pages
 
