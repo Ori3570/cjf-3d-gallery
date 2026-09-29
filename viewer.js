@@ -87,7 +87,7 @@ async function fetchRange(url, start, end, onData, stallMs) {
   const controller = new AbortController();
   let timer = setTimeout(() => controller.abort(), stallMs);
   try {
-    const response = await fetch(url, {headers: {Range: `bytes=${start}-${end}`}, signal: controller.signal, cache: 'no-store'});
+    const response = await fetch(url, {headers: {Range: `bytes=${start}-${end}`}, signal: controller.signal});
     if (response.status !== 206) throw Error('服务器不支持断点下载');
     const reader = response.body.getReader(), pieces = [];
     let received = 0;

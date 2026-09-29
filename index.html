@@ -11,7 +11,7 @@
   <title>cjf · 一张照片的空间</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23171715'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='34' fill='%23e3bd86'%3Ec%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
-  <script type="module" src="viewer.js?v=2"></script>
+  <script type="module" src="viewer.js?v=3"></script>
 </head>
 <body>
   <header class="masthead">
@@ -39,6 +39,7 @@
           <span class="loading-title">进入照片的空间</span>
           <span id="status" role="status" aria-live="polite">正在读取场景…</span>
           <progress id="progress" max="100" value="0" aria-label="模型加载进度"></progress>
+          <span class="loading-note">三维数据约 54 MB，仅首次打开需要传输，之后由浏览器缓存。</span>
           <button id="retry" type="button" hidden>重新加载</button>
         </div>
         <span id="gesture-hint" class="gesture-hint" hidden>拖动环绕 · 滚轮缩放</span>
